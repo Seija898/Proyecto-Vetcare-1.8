@@ -1,0 +1,225 @@
+/* =========================================================
+   BD: Clinica Veterinaria - VetCare
+   Motor: MySQL 8+
+   ========================================================= */
+
+DROP DATABASE IF EXISTS bd_vetcare;
+CREATE DATABASE bd_vetcare
+  DEFAULT CHARACTER SET utf8mb4
+  DEFAULT COLLATE utf8mb4_0900_ai_ci;
+
+USE bd_vetcare;
+
+-- =========================================================
+-- SEGURIDAD: ROLES Y USUARIOS
+-- =========================================================
+
+DROP TABLE IF EXISTS usuario_rol;
+DROP TABLE IF EXISTS usuarios;
+DROP TABLE IF EXISTS roles;
+
+CREATE TABLE roles (
+    id_rol INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL UNIQUE
+) ENGINE=InnoDB;
+
+CREATE TABLE usuarios (
+    id_usuario INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL UNIQUE,
+    clave VARCHAR(100) NOT NULL,
+    email VARCHAR(100) NOT NULL,
+    estado TINYINT NOT NULL DEFAULT 1
+) ENGINE=InnoDB;
+
+CREATE TABLE usuario_rol (
+    id_usuario INT NOT NULL,
+    id_rol INT NOT NULL,
+    PRIMARY KEY (id_usuario, id_rol),
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario),
+    FOREIGN KEY (id_rol) REFERENCES roles(id_rol)
+) ENGINE=InnoDB;
+
+-- Datos iniciales
+INSERT INTO roles (nombre) VALUES
+('ADMIN'),
+('VETERINARIO'),
+('RECEPCION');
+
+INSERT INTO usuarios (nombre, clave, email)
+VALUES ('admin', '1234', 'admin@vetcare.com');
+
+INSERT INTO usuario_rol VALUES (1, 1);
+
+-- =========================================================
+-- TABLA: veterinarios
+-- =========================================================
+
+DROP TABLE IF EXISTS veterinarios;
+CREATE TABLE veterinarios (
+    id_veterinario INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL,
+    especialidad VARCHAR(150),
+    telefono VARCHAR(20),
+    correo VARCHAR(100),
+    fecha_registro TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_veterinarios_correo (correo)
+) ENGINE=InnoDB;
+
+-- =========================================================
+-- TABLA: mascotas
+-- =========================================================
+
+DROP TABLE IF EXISTS mascotas;
+CREATE TABLE mascotas (
+    id_mascota INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL,
+    tipo VARCHAR(50) NOT NULL,
+    dueno VARCHAR(100) NOT NULL,
+    peso DECIMAL(5,2) NULL,
+    fecha_registro TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_mascotas_dueno (dueno),
+    KEY idx_mascotas_tipo (tipo)
+) ENGINE=InnoDB;
+
+-- =========================================================
+-- TABLA: citas
+-- =========================================================
+
+DROP TABLE IF EXISTS citas;
+CREATE TABLE citas (
+    id_cita INT AUTO_INCREMENT PRIMARY KEY,
+    id_mascota INT NOT NULL,
+    fecha DATE NOT NULL,
+    hora TIME NOT NULL,
+    tipo_consulta VARCHAR(150),
+    estado ENUM('PROGRAMADA','CONFIRMADA','EN_ATENCION','ATENDIDA','CANCELADA')
+           NOT NULL DEFAULT 'PROGRAMADA',
+    motivo TEXT NOT NULL,
+    observaciones TEXT NULL,
+    fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_citas_mascotas
+      FOREIGN KEY (id_mascota) REFERENCES mascotas(id_mascota)
+      ON UPDATE CASCADE
+      ON DELETE RESTRICT,
+
+    KEY idx_citas_mascota_fecha (id_mascota, fecha),
+    KEY idx_citas_estado (estado)
+) ENGINE=InnoDB;
+
+-- =========================================================
+-- TABLA: consultas
+-- =========================================================
+
+DROP TABLE IF EXISTS consultas;
+CREATE TABLE consultas (
+    id_consulta INT AUTO_INCREMENT PRIMARY KEY,
+    id_mascota INT NOT NULL,
+    id_cita INT NULL,
+    id_veterinario INT NOT NULL,
+
+    motivo_consulta VARCHAR(255),
+    estado ENUM('ABIERTA','CERRADA','CANCELADA') NOT NULL DEFAULT 'ABIERTA',
+    fecha_inicio TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    fecha_cierre TIMESTAMP NULL,
+
+    CONSTRAINT fk_consultas_mascotas
+      FOREIGN KEY (id_mascota) REFERENCES mascotas(id_mascota),
+
+    CONSTRAINT fk_consultas_citas
+      FOREIGN KEY (id_cita) REFERENCES citas(id_cita)
+      ON DELETE SET NULL,
+
+    CONSTRAINT fk_consultas_veterinarios
+      FOREIGN KEY (id_veterinario) REFERENCES veterinarios(id_veterinario),
+
+    KEY idx_consultas_mascota (id_mascota),
+    KEY idx_consultas_estado (estado),
+    KEY idx_consultas_veterinario (id_veterinario)
+) ENGINE=InnoDB;
+
+-- =========================================================
+-- TABLA: historial_clinico
+-- =========================================================
+
+DROP TABLE IF EXISTS historial_clinico;
+CREATE TABLE historial_clinico (
+    id_historial INT AUTO_INCREMENT PRIMARY KEY,
+    id_mascota INT NOT NULL,
+    id_consulta INT NOT NULL,
+    id_veterinario INT NOT NULL,
+
+    diagnostico TEXT,
+    tratamiento TEXT,
+    observaciones TEXT,
+    fecha_registro TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_historial_mascotas
+      FOREIGN KEY (id_mascota) REFERENCES mascotas(id_mascota),
+
+    CONSTRAINT fk_historial_consultas
+      FOREIGN KEY (id_consulta) REFERENCES consultas(id_consulta),
+
+    CONSTRAINT fk_historial_veterinarios
+      FOREIGN KEY (id_veterinario) REFERENCES veterinarios(id_veterinario),
+
+    KEY idx_historial_mascota_fecha (id_mascota, fecha_registro),
+    KEY idx_historial_consulta (id_consulta)
+) ENGINE=InnoDB;
+
+-- =========================================================
+-- VISTA: historial completo por mascota
+-- =========================================================
+
+DROP VIEW IF EXISTS vw_historial_mascota;
+CREATE VIEW vw_historial_mascota AS
+SELECT
+    hc.id_historial,
+    m.id_mascota,
+    m.nombre AS mascota,
+    m.tipo,
+    m.dueno,
+    c.id_consulta,
+    ci.id_cita,
+    c.estado AS estado_consulta,
+    v.nombre AS veterinario,
+    c.motivo_consulta,
+    hc.diagnostico,
+    hc.tratamiento,
+    hc.observaciones,
+    c.fecha_inicio,
+    c.fecha_cierre,
+    hc.fecha_registro
+FROM historial_clinico hc
+JOIN mascotas m     ON m.id_mascota = hc.id_mascota
+JOIN consultas c    ON c.id_consulta = hc.id_consulta
+JOIN veterinarios v ON v.id_veterinario = hc.id_veterinario
+LEFT JOIN citas ci  ON ci.id_cita = c.id_cita;
+
+-- =========================================================
+-- STORED PROCEDURE: VALIDAR USUARIO
+-- =========================================================
+
+DROP PROCEDURE IF EXISTS SP_ValidarUsuario;
+DELIMITER $$
+
+CREATE PROCEDURE SP_ValidarUsuario (
+    IN p_nombre VARCHAR(50),
+    IN p_clave  VARCHAR(100)
+)
+BEGIN
+    SELECT
+        u.id_usuario AS ID,
+        u.nombre     AS Nombre,
+        u.email      AS Email,
+        r.id_rol     AS RolID,
+        r.nombre     AS RolNombre
+    FROM usuarios u
+    INNER JOIN usuario_rol ur ON u.id_usuario = ur.id_usuario
+    INNER JOIN roles r        ON ur.id_rol = r.id_rol
+    WHERE u.nombre = p_nombre
+      AND u.clave  = p_clave
+      AND u.estado = 1;
+END $$
+
+DELIMITER ;
